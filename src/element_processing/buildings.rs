@@ -51,7 +51,7 @@ pub fn generate_buildings(
 
     // Use fixed starting Y coordinate based on maximum ground level when terrain is enabled
     let start_y_offset = if args.terrain {
-        // Get nodes' XZ points to find maximum elevation
+        // Get nodes' XZ points to find minimum elevation across the footprint
         let building_points: Vec<XZPoint> = element
             .nodes
             .iter()
@@ -63,18 +63,25 @@ pub fn generate_buildings(
             })
             .collect();
 
-        // Calculate maximum and minimum ground level across all nodes
-        let mut max_ground_level = args.ground_level;
-
+        // Collect ground levels for all footprint points (if available)
+        let mut levels: Vec<i32> = Vec::with_capacity(building_points.len());
         for point in &building_points {
             if let Some(ground) = editor.get_ground() {
-                let level = ground.level(*point);
-                max_ground_level = max_ground_level.max(level);
+                levels.push(ground.level(*point));
             }
         }
 
-        // Use the maximum level + min_level offset as the fixed base for the entire building
-        max_ground_level + min_level_offset
+        // If we have no samples, fall back to provided ground level
+        if levels.is_empty() {
+            args.ground_level + min_level_offset
+        } else {
+
+        // Use the minimum ground level across the footprint so buildings rest on the lowest sampled point
+        let min_sample = *levels.iter().min().unwrap();
+
+            // Use the minimum sampled level + min_level offset as the fixed base for the entire building
+            min_sample + min_level_offset
+        }
     } else {
         // When terrain is disabled, just use min_level_offset
         min_level_offset
@@ -155,8 +162,8 @@ pub fn generate_buildings(
             let lev = levels - min_level;
 
             if lev >= 1 {
-                // Treat declared building levels as (levels + 1) so roofs render for commonly-used values
-                building_height = multiply_scale((levels + 1) * 4 + 2, scale_factor);
+                // Use declared building levels directly (match OSM data)
+                building_height = multiply_scale(levels * 4 + 2, scale_factor);
                 building_height = building_height.max(3);
 
                 // Mark as tall building if more than 7 stories
@@ -167,13 +174,7 @@ pub fn generate_buildings(
         }
     }
 
-    // Keep a parsed copy of building:levels (incremented by 1) so downstream logic
-    // respects the "levels + 1" policy used across generation.
-    let building_levels_opt: Option<i32> = element
-        .tags
-        .get("building:levels")
-        .and_then(|s| s.parse::<i32>().ok())
-        .map(|l| l + 1);
+    // building_levels_opt removed (no longer used)
 
     if let Some(height_str) = element.tags.get("height") {
         if let Ok(height) = height_str.trim_end_matches("m").trim().parse::<f64>() {
@@ -188,8 +189,8 @@ pub fn generate_buildings(
     }
 
     if let Some(levels) = relation_levels {
-        // Relation-provided levels should follow the same +1 policy
-        building_height = multiply_scale((levels + 1) * 4 + 2, scale_factor);
+        // Relation-provided levels follow the declared OSM value
+        building_height = multiply_scale(levels * 4, scale_factor);
         building_height = building_height.max(3);
 
         // Mark as tall building if more than 7 stories
@@ -274,11 +275,14 @@ pub fn generate_buildings(
         {
             // Parking building structure
 
-            // If an explicit `building:levels` is provided, respect it exactly.
-            // Otherwise fall back to deriving number of levels from `building_height`.
-            let num_levels: i32 = if let Some(levels) = building_levels_opt {
-                // Ensure at least 1 when explicitly provided
-                levels.max(1)
+            // If an explicit `building:levels` is provided, treat as (levels + 1), else derive from height.
+            let num_levels: i32 = if let Some(levels) = element
+                .tags
+                .get("building:levels")
+                .and_then(|s| s.parse::<i32>().ok())
+            {
+                // Apply +1 for parking
+                (levels + 1).max(1)
             } else {
                 // Derived levels: floor every 4 blocks. Ensure a sensible minimum for parking structures.
                 let derived = (building_height / 4).max(1);
