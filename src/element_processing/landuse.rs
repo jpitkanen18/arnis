@@ -55,6 +55,8 @@ pub fn generate_landuse(editor: &mut WorldEditor, element: &ProcessedWay, args: 
             editor.set_block(block_type, x, 1, z, None, None);
         } else if landuse_tag == "construction" || landuse_tag == "railway" {
             editor.set_block(block_type, x, 0, z, None, Some(&[SPONGE]));
+        } else if landuse_tag == "grass" {
+            editor.set_block(block_type, x, 0, z, None, Some(&[SPONGE]));
         } else {
             editor.set_block(block_type, x, 0, z, None, None);
         }
