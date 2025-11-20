@@ -77,7 +77,7 @@ pub fn generate_world(
             "Detected {} building relation(s) with parts (skipping {} outline way(s))",
             relations_with_parts.len(),
             outlines_with_parts.len()
-        );ƒ
+        );
         println!("Sample outline way IDs flagged: {:?}", sample_outlines);
     }
 

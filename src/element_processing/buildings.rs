@@ -149,6 +149,7 @@ pub fn generate_buildings(
     let mut processed_points: HashSet<(i32, i32)> = HashSet::new();
     let mut building_height: i32 = ((6.0 * scale_factor) as i32).max(3); // Default building height with scale and minimum
     let mut is_tall_building = false;
+    let mut has_explicit_levels = false;
     let mut rng = rand::thread_rng();
     let use_vertical_windows = rng.gen_bool(0.7);
     let use_accent_roof_line = rng.gen_bool(0.25);
@@ -184,6 +185,7 @@ pub fn generate_buildings(
         .or_else(|| element.tags.get("levels"))
         .and_then(|value| parse_level_to_i32(value))
     {
+        has_explicit_levels = true;
         if levels_total >= 1 {
             let effective_levels = if is_building_part {
                 (levels_total - min_level).max(1)
@@ -204,27 +206,30 @@ pub fn generate_buildings(
 
     // building_levels_opt removed (no longer used)
 
-    if let Some(height_meters) = element
-        .tags
-        .get("height")
-        .and_then(|value| parse_height_to_f64(value))
-    {
-        let mut effective_height = height_meters;
-        if is_building_part {
-            if let Some(min_h) = min_height_meters {
-                effective_height = (height_meters - min_h).max(1.0);
-            } else if min_level > 0 {
-                let approximate_base = (min_level * 4) as f64;
-                effective_height = (height_meters - approximate_base).max(1.0);
+    if !has_explicit_levels {
+        if let Some(height_meters) = element
+            .tags
+            .get("building:height")
+            .or_else(|| element.tags.get("height"))
+            .and_then(|value| parse_height_to_f64(value))
+        {
+            let mut effective_height = height_meters;
+            if is_building_part {
+                if let Some(min_h) = min_height_meters {
+                    effective_height = (height_meters - min_h).max(1.0);
+                } else if min_level > 0 {
+                    let approximate_base = (min_level * 4) as f64;
+                    effective_height = (height_meters - approximate_base).max(1.0);
+                }
             }
-        }
 
-        building_height = (effective_height * scale_factor).floor() as i32;
-        building_height = building_height.max(3);
+            building_height = (effective_height * scale_factor).floor() as i32;
+            building_height = building_height.max(3);
 
-        // Mark as tall building if height suggests more than 7 stories
-        if effective_height > 28.0 {
-            is_tall_building = true;
+            // Mark as tall building if height suggests more than 7 stories
+            if effective_height > 28.0 {
+                is_tall_building = true;
+            }
         }
     }
 
