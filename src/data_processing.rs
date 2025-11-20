@@ -4,12 +4,13 @@ use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::element_processing::*;
 use crate::ground::Ground;
-use crate::osm_parser::ProcessedElement;
+use crate::osm_parser::{ProcessedElement, ProcessedMemberRole};
 use crate::progress::emit_gui_progress_update;
 use crate::telemetry::{send_log, LogLevel};
 use crate::world_editor::WorldEditor;
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::HashSet;
 
 pub const MIN_Y: i32 = -64;
 
@@ -21,6 +22,36 @@ pub fn generate_world(
     args: &Args,
 ) -> Result<(), String> {
     let mut editor: WorldEditor = WorldEditor::new(args.path.clone(), &xzbbox, llbbox);
+
+    let mut outlines_with_parts: HashSet<u64> = HashSet::new();
+    let mut relations_with_parts: HashSet<u64> = HashSet::new();
+
+    for element in &elements {
+        if let ProcessedElement::Relation(relation) = element {
+            if !(relation.tags.contains_key("building")
+                || relation.tags.contains_key("building:part"))
+            {
+                continue;
+            }
+
+            let has_part_members = relation
+                .members
+                .iter()
+                .any(|member| member.role == ProcessedMemberRole::Part);
+
+            if has_part_members {
+                relations_with_parts.insert(relation.id);
+
+                for member in relation
+                    .members
+                    .iter()
+                    .filter(|member| member.role == ProcessedMemberRole::Outer)
+                {
+                    outlines_with_parts.insert(member.way.id);
+                }
+            }
+        }
+    }
 
     println!("{} Processing data...", "[4/7]".bold());
 
@@ -62,6 +93,11 @@ pub fn generate_world(
 
         match element {
             ProcessedElement::Way(way) => {
+                if outlines_with_parts.contains(&way.id) && !way.tags.contains_key("building:part")
+                {
+                    continue;
+                }
+
                 if way.tags.contains_key("building") || way.tags.contains_key("building:part") {
                     buildings::generate_buildings(&mut editor, way, args, None);
                 } else if way.tags.contains_key("highway") {
@@ -119,6 +155,9 @@ pub fn generate_world(
             }
             ProcessedElement::Relation(rel) => {
                 if rel.tags.contains_key("building") || rel.tags.contains_key("building:part") {
+                    if relations_with_parts.contains(&rel.id) {
+                        continue;
+                    }
                     buildings::generate_building_from_relation(&mut editor, rel, args);
                 } else if rel.tags.contains_key("water")
                     || rel
