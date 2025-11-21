@@ -24,7 +24,11 @@ fn build_highway_connectivity_map(elements: &[ProcessedElement]) -> HashMap<(i32
 
     for element in elements {
         if let ProcessedElement::Way(way) = element {
-            if way.tags.contains_key("proposed") {
+            if way
+                .tags
+                .get("highway")
+                .is_some_and(|value| value == "proposed")
+            {
                 continue;
             }
             if way.tags.contains_key("highway") {
@@ -69,7 +73,7 @@ fn generate_highways_internal(
     highway_connectivity: &HashMap<(i32, i32), Vec<i32>>, // Maps node coordinates to list of layers that connect to this node
 ) {
     if let Some(highway_type) = element.tags().get("highway") {
-        if element.tags().contains_key("proposed") {
+        if highway_type == "proposed" {
             return;
         }
         if highway_type == "street_lamp" {
