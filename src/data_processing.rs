@@ -44,113 +44,114 @@ pub fn generate_world(
     let progress_increment_prcs: f64 = 45.0 / elements_count as f64;
     let current_progress = AtomicU64::new(250); // 25.0 * 10
 
-    // Wrap editor in Arc<Mutex> for thread-safe access
-    let editor = Arc::new(Mutex::new(editor));
+    // WorldEditor now has interior mutability via Arc<Mutex<WorldToModify>>
+    // No need for external locking - all threads can work truly in parallel!
+    let editor = Arc::new(editor);
     let process_pb = Arc::new(Mutex::new(process_pb));
 
-    // Process elements in parallel - each thread processes one element at a time
-    // Use Arc to share references across threads
-    elements.par_iter().for_each(|element| {
-        // Scope to ensure lock is released quickly
-        {
-            let mut editor = editor.lock().unwrap();
+    // Shuffle elements to distribute heavy elements across the work queue
+    // This prevents all complex elements from being processed sequentially
+    use rand::seq::SliceRandom;
+    use rand::thread_rng;
+    let mut elements_vec: Vec<&ProcessedElement> = elements.iter().collect();
+    elements_vec.shuffle(&mut thread_rng());
 
-            if args.debug {
-                let pb = process_pb.lock().unwrap();
-                pb.set_message(format!(
-                    "(Element ID: {} / Type: {})",
-                    element.id(),
-                    element.kind()
-                ));
+    // Process elements in parallel with better work distribution
+    elements_vec.par_iter().for_each(|element| {
+        if args.debug {
+            let pb = process_pb.lock().unwrap();
+            pb.set_message(format!(
+                "(Element ID: {} / Type: {})",
+                element.id(),
+                element.kind()
+            ));
+        }
+
+        match element {
+            ProcessedElement::Way(way) => {
+                if way.tags.contains_key("building") || way.tags.contains_key("building:part") {
+                    buildings::generate_buildings(&editor, way, args, None);
+                } else if way.tags.contains_key("highway") {
+                    highways::generate_highways(&editor, element, args, &elements);
+                } else if way.tags.contains_key("landuse") {
+                    landuse::generate_landuse(&editor, way, args);
+                } else if way.tags.contains_key("natural") {
+                    natural::generate_natural(&editor, element, args);
+                } else if way.tags.contains_key("amenity") {
+                    amenities::generate_amenities(&editor, element, args);
+                } else if way.tags.contains_key("leisure") {
+                    leisure::generate_leisure(&editor, way, args);
+                } else if way.tags.contains_key("barrier") {
+                    barriers::generate_barriers(&editor, element);
+                } else if let Some(val) = way.tags.get("waterway") {
+                    if val == "dock" {
+                        // docks count as water areas
+                        water_areas::generate_water_area_from_way(&editor, way);
+                    } else {
+                        waterways::generate_waterways(&editor, way);
+                    }
+                } else if way.tags.contains_key("bridge") {
+                    //bridges::generate_bridges(&editor, way, ground_level); // TODO FIX
+                } else if way.tags.contains_key("railway") {
+                    railways::generate_railways(&editor, way);
+                } else if way.tags.contains_key("roller_coaster") {
+                    railways::generate_roller_coaster(&editor, way);
+                } else if way.tags.contains_key("aeroway") || way.tags.contains_key("area:aeroway")
+                {
+                    highways::generate_aeroway(&editor, way, args);
+                } else if way.tags.get("service") == Some(&"siding".to_string()) {
+                    highways::generate_siding(&editor, way);
+                } else if way.tags.contains_key("man_made") {
+                    man_made::generate_man_made(&editor, element, args);
+                }
             }
+            ProcessedElement::Node(node) => {
+                if node.tags.contains_key("door") || node.tags.contains_key("entrance") {
+                    doors::generate_doors(&editor, node);
+                } else if node.tags.contains_key("natural")
+                    && node.tags.get("natural") == Some(&"tree".to_string())
+                {
+                    natural::generate_natural(&editor, element, args);
+                } else if node.tags.contains_key("amenity") {
+                    amenities::generate_amenities(&editor, element, args);
+                } else if node.tags.contains_key("barrier") {
+                    barriers::generate_barrier_nodes(&editor, node);
+                } else if node.tags.contains_key("highway") {
+                    highways::generate_highways(&editor, element, args, &elements);
+                } else if node.tags.contains_key("tourism") {
+                    tourisms::generate_tourisms(&editor, node);
+                } else if node.tags.contains_key("man_made") {
+                    man_made::generate_man_made_nodes(&editor, node);
+                }
+            }
+            ProcessedElement::Relation(rel) => {
+                if rel.tags.contains_key("building") || rel.tags.contains_key("building:part") {
+                    buildings::generate_building_from_relation(&editor, rel, args);
+                } else if rel.tags.contains_key("water")
+                    || rel
+                        .tags
+                        .get("natural")
+                        .map(|val| val == "water" || val == "bay")
+                        .unwrap_or(false)
+                {
+                    water_areas::generate_water_areas_from_relation(&editor, rel);
+                } else if rel.tags.contains_key("natural") {
+                    natural::generate_natural_from_relation(&editor, rel, args);
+                } else if rel.tags.contains_key("landuse") {
+                    landuse::generate_landuse_from_relation(&editor, rel, args);
+                } else if rel.tags.get("leisure") == Some(&"park".to_string()) {
+                    leisure::generate_leisure_from_relation(&editor, rel, args);
+                } else if rel.tags.contains_key("man_made") {
+                    man_made::generate_man_made(
+                        &editor,
+                        &ProcessedElement::Relation(rel.clone()),
+                        args,
+                    );
+                }
+            }
+        } // Close match
 
-            match element {
-                ProcessedElement::Way(way) => {
-                    if way.tags.contains_key("building") || way.tags.contains_key("building:part") {
-                        buildings::generate_buildings(&mut editor, way, args, None);
-                    } else if way.tags.contains_key("highway") {
-                        highways::generate_highways(&mut editor, element, args, &elements);
-                    } else if way.tags.contains_key("landuse") {
-                        landuse::generate_landuse(&mut editor, way, args);
-                    } else if way.tags.contains_key("natural") {
-                        natural::generate_natural(&mut editor, element, args);
-                    } else if way.tags.contains_key("amenity") {
-                        amenities::generate_amenities(&mut editor, element, args);
-                    } else if way.tags.contains_key("leisure") {
-                        leisure::generate_leisure(&mut editor, way, args);
-                    } else if way.tags.contains_key("barrier") {
-                        barriers::generate_barriers(&mut editor, element);
-                    } else if let Some(val) = way.tags.get("waterway") {
-                        if val == "dock" {
-                            // docks count as water areas
-                            water_areas::generate_water_area_from_way(&mut editor, way);
-                        } else {
-                            waterways::generate_waterways(&mut editor, way);
-                        }
-                    } else if way.tags.contains_key("bridge") {
-                        //bridges::generate_bridges(&mut editor, way, ground_level); // TODO FIX
-                    } else if way.tags.contains_key("railway") {
-                        railways::generate_railways(&mut editor, way);
-                    } else if way.tags.contains_key("roller_coaster") {
-                        railways::generate_roller_coaster(&mut editor, way);
-                    } else if way.tags.contains_key("aeroway")
-                        || way.tags.contains_key("area:aeroway")
-                    {
-                        highways::generate_aeroway(&mut editor, way, args);
-                    } else if way.tags.get("service") == Some(&"siding".to_string()) {
-                        highways::generate_siding(&mut editor, way);
-                    } else if way.tags.contains_key("man_made") {
-                        man_made::generate_man_made(&mut editor, element, args);
-                    }
-                }
-                ProcessedElement::Node(node) => {
-                    if node.tags.contains_key("door") || node.tags.contains_key("entrance") {
-                        doors::generate_doors(&mut editor, node);
-                    } else if node.tags.contains_key("natural")
-                        && node.tags.get("natural") == Some(&"tree".to_string())
-                    {
-                        natural::generate_natural(&mut editor, element, args);
-                    } else if node.tags.contains_key("amenity") {
-                        amenities::generate_amenities(&mut editor, element, args);
-                    } else if node.tags.contains_key("barrier") {
-                        barriers::generate_barrier_nodes(&mut editor, node);
-                    } else if node.tags.contains_key("highway") {
-                        highways::generate_highways(&mut editor, element, args, &elements);
-                    } else if node.tags.contains_key("tourism") {
-                        tourisms::generate_tourisms(&mut editor, node);
-                    } else if node.tags.contains_key("man_made") {
-                        man_made::generate_man_made_nodes(&mut editor, node);
-                    }
-                }
-                ProcessedElement::Relation(rel) => {
-                    if rel.tags.contains_key("building") || rel.tags.contains_key("building:part") {
-                        buildings::generate_building_from_relation(&mut editor, rel, args);
-                    } else if rel.tags.contains_key("water")
-                        || rel
-                            .tags
-                            .get("natural")
-                            .map(|val| val == "water" || val == "bay")
-                            .unwrap_or(false)
-                    {
-                        water_areas::generate_water_areas_from_relation(&mut editor, rel);
-                    } else if rel.tags.contains_key("natural") {
-                        natural::generate_natural_from_relation(&mut editor, rel, args);
-                    } else if rel.tags.contains_key("landuse") {
-                        landuse::generate_landuse_from_relation(&mut editor, rel, args);
-                    } else if rel.tags.get("leisure") == Some(&"park".to_string()) {
-                        leisure::generate_leisure_from_relation(&mut editor, rel, args);
-                    } else if rel.tags.contains_key("man_made") {
-                        man_made::generate_man_made(
-                            &mut editor,
-                            &ProcessedElement::Relation(rel.clone()),
-                            args,
-                        );
-                    }
-                }
-            } // Close match
-        } // Close lock scope
-
-        // Update progress after releasing lock
+        // Update progress
         let new_progress =
             current_progress.fetch_add((progress_increment_prcs * 10.0) as u64, Ordering::Relaxed);
         if new_progress % 3 == 0 {
@@ -172,11 +173,9 @@ pub fn generate_world(
         .unwrap();
     process_pb.finish();
 
-    // Extract editor from Arc<Mutex>
+    // Extract editor from Arc
     let editor = Arc::try_unwrap(editor)
-        .unwrap_or_else(|_| panic!("Failed to unwrap editor - still has references"))
-        .into_inner()
-        .unwrap();
+        .unwrap_or_else(|_| panic!("Failed to unwrap editor - still has references"));
 
     // Generate ground layer
     let total_blocks: u64 = xzbbox.bounding_rect().total_blocks();
@@ -197,8 +196,7 @@ pub fn generate_world(
 
     let groundlayer_block = GRASS_BLOCK;
 
-    // Wrap editor in Mutex for thread-safe access
-    let editor = Mutex::new(editor);
+    // Editor is already Arc-wrapped from earlier
     let block_counter = AtomicU64::new(0);
     let gui_progress = AtomicU64::new(700); // Start at 70.0 * 10
 
@@ -218,7 +216,6 @@ pub fn generate_world(
     coords.par_chunks(chunk_size).for_each(|chunk| {
         // Pre-calculate absolute_y values for the entire chunk
         let absolute_ys: Vec<i32> = if fillground {
-            let editor = editor.lock().unwrap();
             chunk
                 .iter()
                 .map(|(x, z)| editor.get_absolute_y(*x, -3, *z))
@@ -227,9 +224,7 @@ pub fn generate_world(
             vec![]
         };
 
-        // Now process the entire chunk with a single lock acquisition
-        let mut editor = editor.lock().unwrap();
-
+        // Editor is already thread-safe with interior mutability
         for (i, (x, z)) in chunk.iter().enumerate() {
             // Only place ground blocks if nothing exists at ground level (y=0)
             // This prevents overwriting buildings and other structures
@@ -264,8 +259,6 @@ pub fn generate_world(
         let chunk_len = chunk.len() as u64;
         let count = block_counter.fetch_add(chunk_len, Ordering::Relaxed);
 
-        drop(editor); // Release lock before progress update
-
         // Update progress bar with actual chunk size
         ground_pb.inc(chunk_len);
 
@@ -286,8 +279,7 @@ pub fn generate_world(
     }
     ground_pb.finish();
 
-    // Extract editor from Mutex
-    let mut editor = editor.into_inner().unwrap();
+    // Editor is already mutable through interior mutability
 
     // Save world
     editor.save();

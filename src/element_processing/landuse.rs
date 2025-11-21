@@ -6,7 +6,7 @@ use crate::osm_parser::{ProcessedMemberRole, ProcessedRelation, ProcessedWay};
 use crate::world_editor::WorldEditor;
 use rand::Rng;
 
-pub fn generate_landuse(editor: &mut WorldEditor, element: &ProcessedWay, args: &Args) {
+pub fn generate_landuse(editor: &WorldEditor, element: &ProcessedWay, args: &Args) {
     // Determine block type based on landuse tag
     let binding: String = "".to_string();
     let landuse_tag: &String = element.tags.get("landuse").unwrap_or(&binding);
@@ -274,7 +274,7 @@ pub fn generate_landuse(editor: &mut WorldEditor, element: &ProcessedWay, args: 
 }
 
 pub fn generate_landuse_from_relation(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     rel: &ProcessedRelation,
     args: &Args,
 ) {

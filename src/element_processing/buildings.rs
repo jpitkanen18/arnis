@@ -24,7 +24,7 @@ enum RoofType {
 
 #[inline]
 pub fn generate_buildings(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     element: &ProcessedWay,
     args: &Args,
     relation_levels: Option<i32>,
@@ -760,7 +760,7 @@ fn multiply_scale(value: i32, scale_factor: f64) -> i32 {
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn generate_roof(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     element: &ProcessedWay,
     start_y_offset: i32,
     building_height: i32,
@@ -1504,7 +1504,7 @@ fn generate_roof(
 }
 
 pub fn generate_building_from_relation(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     relation: &ProcessedRelation,
     args: &Args,
 ) {
@@ -1540,7 +1540,7 @@ pub fn generate_building_from_relation(
 
 /// Generates a bridge structure, paying attention to the "level" tag.
 fn generate_bridge(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     element: &ProcessedWay,
     floodfill_timeout: Option<&Duration>,
 ) {

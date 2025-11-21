@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 /// Generates highways with elevation support based on layer tags and connectivity analysis
 pub fn generate_highways(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     element: &ProcessedElement,
     args: &Args,
     all_elements: &[ProcessedElement],
@@ -60,7 +60,7 @@ fn build_highway_connectivity_map(elements: &[ProcessedElement]) -> HashMap<(i32
 
 /// Internal function that generates highways with connectivity context for elevation handling
 fn generate_highways_internal(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     element: &ProcessedElement,
     args: &Args,
     highway_connectivity: &HashMap<(i32, i32), Vec<i32>>, // Maps node coordinates to list of layers that connect to this node
@@ -566,7 +566,7 @@ fn calculate_point_elevation(
 
 /// Add support pillars for elevated highways
 fn add_highway_support_pillar(
-    editor: &mut WorldEditor,
+    editor: &WorldEditor,
     x: i32,
     highway_y: i32,
     z: i32,
@@ -591,7 +591,7 @@ fn add_highway_support_pillar(
 }
 
 /// Generates a siding using stone brick slabs
-pub fn generate_siding(editor: &mut WorldEditor, element: &ProcessedWay) {
+pub fn generate_siding(editor: &WorldEditor, element: &ProcessedWay) {
     let mut previous_node: Option<XZPoint> = None;
     let siding_block: Block = STONE_BRICK_SLAB;
 
@@ -621,7 +621,7 @@ pub fn generate_siding(editor: &mut WorldEditor, element: &ProcessedWay) {
 }
 
 /// Generates an aeroway
-pub fn generate_aeroway(editor: &mut WorldEditor, way: &ProcessedWay, args: &Args) {
+pub fn generate_aeroway(editor: &WorldEditor, way: &ProcessedWay, args: &Args) {
     let mut previous_node: Option<(i32, i32)> = None;
     let surface_block = LIGHT_GRAY_CONCRETE;
 
