@@ -419,6 +419,14 @@ pub fn generate_world(
                         Some(&[GRASS_BLOCK, DIRT, WATER]),
                         None,
                     );
+                    editor.set_block_absolute(
+                        DIRT,
+                        *x,
+                        elevation - 1,
+                        *z,
+                        Some(&[GRASS_BLOCK, DIRT, WATER, STONE]),
+                        None,
+                    );
                 }
             }
         }
