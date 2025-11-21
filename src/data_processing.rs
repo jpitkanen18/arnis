@@ -319,7 +319,7 @@ pub fn generate_world(
         let absolute_ys: Vec<i32> = if fillground {
             chunk
                 .iter()
-                .map(|(x, z)| editor.get_absolute_y(*x, -3, *z))
+                .map(|(x, z)| editor.get_absolute_y(*x, 0, *z))
                 .collect()
         } else {
             vec![]
