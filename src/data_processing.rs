@@ -23,8 +23,48 @@ pub fn generate_world(
     ground: Ground,
     args: &Args,
 ) -> Result<(), String> {
-    let mut editor: WorldEditor = WorldEditor::new(args.path.clone(), &xzbbox, llbbox);
+    // Configure Rayon to ensure all cores are used
+    let num_threads = rayon::current_num_threads();
+    println!("Using {} threads for parallel processing", num_threads);
 
+    // Track element type distribution to identify bottlenecks
+    use std::collections::HashMap;
+    let mut element_type_counts: HashMap<String, usize> = HashMap::new();
+    for elem in &elements {
+        let key = match elem {
+            ProcessedElement::Way(way) => {
+                if way.tags.contains_key("building") {
+                    "building"
+                } else if way.tags.contains_key("highway") {
+                    "highway"
+                } else if way.tags.contains_key("landuse") {
+                    "landuse"
+                } else if way.tags.contains_key("natural") {
+                    "natural"
+                } else if way.tags.contains_key("leisure") {
+                    "leisure"
+                } else if way.tags.contains_key("waterway") {
+                    "waterway"
+                } else {
+                    "other_way"
+                }
+            }
+            ProcessedElement::Node(_) => "node",
+            ProcessedElement::Relation(rel) => {
+                if rel.tags.contains_key("building") {
+                    "building_rel"
+                } else if rel.tags.contains_key("natural") {
+                    "natural_rel"
+                } else {
+                    "other_rel"
+                }
+            }
+        };
+        *element_type_counts.entry(key.to_string()).or_insert(0) += 1;
+    }
+    println!("Element distribution: {:?}", element_type_counts);
+
+    let mut editor: WorldEditor = WorldEditor::new(args.path.clone(), &xzbbox, llbbox);
     println!("{} Processing data...", "[4/7]".bold());
 
     // Set ground reference in the editor to enable elevation-aware block placement
@@ -35,6 +75,10 @@ pub fn generate_world(
 
     // Process data
     let elements_count: usize = elements.len();
+    println!(
+        "Processing {} elements with chunk-level locking for maximum parallelism",
+        elements_count
+    );
     let process_pb: ProgressBar = ProgressBar::new(elements_count as u64);
     process_pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{bar:45.white/black}] {pos}/{len} elements ({eta}) {msg}")
@@ -42,7 +86,7 @@ pub fn generate_world(
         .progress_chars("█▓░"));
 
     let progress_increment_prcs: f64 = 45.0 / elements_count as f64;
-    let current_progress = AtomicU64::new(250); // 25.0 * 10
+    let current_progress = AtomicU64::new(0); // Count processed elements
 
     // WorldEditor now has interior mutability via Arc<Mutex<WorldToModify>>
     // No need for external locking - all threads can work truly in parallel!
@@ -56,11 +100,16 @@ pub fn generate_world(
     let mut elements_vec: Vec<&ProcessedElement> = elements.iter().collect();
     elements_vec.shuffle(&mut thread_rng());
 
-    // Process elements in parallel with better work distribution
-    // Use smaller chunks for better load balancing across cores
+    // Process each element individually to maximize work stealing
+    // Force minimum chunk size to ensure fine-grained work distribution
+    use rayon::iter::IndexedParallelIterator;
     use rayon::iter::ParallelIterator;
-    elements_vec.par_chunks(100).for_each(|chunk| {
-        for element in chunk {
+
+    elements_vec
+        .par_iter()
+        .with_min_len(1)
+        .with_max_len(1)
+        .for_each(|element| {
             if args.debug {
                 let pb = process_pb.lock().unwrap();
                 pb.set_message(format!(
@@ -155,19 +204,28 @@ pub fn generate_world(
                 }
             } // Close match
 
-            // Update progress per element
-            let new_progress = current_progress
-                .fetch_add((progress_increment_prcs * 10.0) as u64, Ordering::Relaxed);
-            if new_progress % 3 == 0 {
-                // Update every ~0.3%
-                emit_gui_progress_update(new_progress as f64 / 10.0, "");
-            }
+            // Update progress - track element count for occasional updates
+            let elem_num = current_progress.fetch_add(1, Ordering::Relaxed);
 
-            let pb = process_pb.lock().unwrap();
-            pb.inc(1);
-            drop(pb);
-        } // Close inner for loop
-    }); // Close par_chunks forEach
+            // Only update progress bar and GUI every ~50 elements (reduces lock contention)
+            if elem_num % 50 == 0 {
+                let new_progress =
+                    ((25.0 + (elem_num as f64 * progress_increment_prcs)) * 10.0) as u64;
+                if new_progress % 30 == 0 {
+                    emit_gui_progress_update(new_progress as f64 / 10.0, "");
+                }
+
+                let pb = process_pb.lock().unwrap();
+                pb.set_position(elem_num);
+                drop(pb);
+            }
+        }); // Close par_iter forEach
+
+    // Final progress bar update
+    {
+        let pb = process_pb.lock().unwrap();
+        pb.set_position(elements.len() as u64);
+    }
 
     let process_pb = Arc::try_unwrap(process_pb)
         .unwrap_or_else(|arc| {
