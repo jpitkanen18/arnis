@@ -7,11 +7,19 @@ pub fn generate_barriers(editor: &WorldEditor, element: &ProcessedElement) {
     // Default values
     let mut barrier_material: Block = COBBLESTONE_WALL;
     let mut barrier_height: i32 = 2;
+    let mut forced_wall_height: Option<i32> = None;
+    let mut add_topper: bool = true;
 
     match element.tags().get("barrier").map(|s| s.as_str()) {
         Some("bollard") => {
             barrier_material = COBBLESTONE_WALL;
             barrier_height = 1;
+        }
+        Some("guard_rail") => {
+            barrier_material = STONE_BRICK_WALL;
+            barrier_height = 1;
+            forced_wall_height = Some(1);
+            add_topper = false;
         }
         Some("kerb") => {
             // Ignore kerbs
@@ -75,12 +83,14 @@ pub fn generate_barriers(editor: &WorldEditor, element: &ProcessedElement) {
 
     if let ProcessedElement::Way(way) = element {
         // Determine wall height
-        let wall_height: i32 = element
-            .tags()
-            .get("height")
-            .and_then(|height: &String| height.parse::<f32>().ok())
-            .map(|height: f32| height.round() as i32)
-            .unwrap_or(barrier_height);
+        let wall_height: i32 = forced_wall_height.unwrap_or_else(|| {
+            element
+                .tags()
+                .get("height")
+                .and_then(|height: &String| height.parse::<f32>().ok())
+                .map(|height: f32| height.round() as i32)
+                .unwrap_or(barrier_height)
+        });
 
         // Process nodes to create the barrier wall
         for i in 1..way.nodes.len() {
@@ -102,7 +112,7 @@ pub fn generate_barriers(editor: &WorldEditor, element: &ProcessedElement) {
                 }
 
                 // Add an optional top to the barrier if the height is more than 1
-                if wall_height > 1 {
+                if add_topper && wall_height > 1 {
                     editor.set_block(STONE_BRICK_SLAB, bx, wall_height + 1, bz, None, None);
                 }
             }
