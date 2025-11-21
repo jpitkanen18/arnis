@@ -221,22 +221,33 @@ impl ChunkToModify {
 
 #[derive(Default)]
 struct RegionToModify {
-    chunks: FnvHashMap<(i32, i32), ChunkToModify>,
+    chunks: DashMap<(i32, i32), Mutex<ChunkToModify>>,
 }
 
 impl RegionToModify {
-    fn get_or_create_chunk(&mut self, x: i32, z: i32) -> &mut ChunkToModify {
-        self.chunks.entry((x, z)).or_default()
+    fn get_or_create_chunk(
+        &self,
+        x: i32,
+        z: i32,
+    ) -> dashmap::mapref::one::Ref<'_, (i32, i32), Mutex<ChunkToModify>> {
+        self.chunks
+            .entry((x, z))
+            .or_insert_with(|| Mutex::new(ChunkToModify::default()));
+        self.chunks.get(&(x, z)).unwrap()
     }
 
-    fn get_chunk(&self, x: i32, z: i32) -> Option<&ChunkToModify> {
+    fn get_chunk(
+        &self,
+        x: i32,
+        z: i32,
+    ) -> Option<dashmap::mapref::one::Ref<'_, (i32, i32), Mutex<ChunkToModify>>> {
         self.chunks.get(&(x, z))
     }
 }
 
 #[derive(Default)]
 struct WorldToModify {
-    regions: Arc<DashMap<(i32, i32), Mutex<RegionToModify>>>,
+    regions: Arc<DashMap<(i32, i32), RegionToModify>>,
 }
 
 impl WorldToModify {
@@ -244,10 +255,10 @@ impl WorldToModify {
         &self,
         x: i32,
         z: i32,
-    ) -> dashmap::mapref::one::Ref<'_, (i32, i32), Mutex<RegionToModify>> {
+    ) -> dashmap::mapref::one::Ref<'_, (i32, i32), RegionToModify> {
         self.regions
             .entry((x, z))
-            .or_insert_with(|| Mutex::new(RegionToModify::default()));
+            .or_insert_with(|| RegionToModify::default());
         self.regions.get(&(x, z)).unwrap()
     }
 
@@ -257,9 +268,9 @@ impl WorldToModify {
         let region_x: i32 = chunk_x >> 5;
         let region_z: i32 = chunk_z >> 5;
 
-        let region_mutex = self.regions.get(&(region_x, region_z))?;
-        let region = region_mutex.lock().unwrap();
-        let chunk: &ChunkToModify = region.get_chunk(chunk_x & 31, chunk_z & 31)?;
+        let region = self.regions.get(&(region_x, region_z))?;
+        let chunk_mutex = region.get_chunk(chunk_x & 31, chunk_z & 31)?;
+        let chunk = chunk_mutex.lock().unwrap();
 
         chunk.get_block(
             (x & 15).try_into().unwrap(),
@@ -274,9 +285,9 @@ impl WorldToModify {
         let region_x: i32 = chunk_x >> 5;
         let region_z: i32 = chunk_z >> 5;
 
-        let region_mutex = self.get_or_create_region(region_x, region_z);
-        let mut region = region_mutex.lock().unwrap();
-        let chunk: &mut ChunkToModify = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let region = self.get_or_create_region(region_x, region_z);
+        let chunk_mutex = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let mut chunk = chunk_mutex.lock().unwrap();
 
         chunk.set_block(
             (x & 15).try_into().unwrap(),
@@ -298,9 +309,9 @@ impl WorldToModify {
         let region_x: i32 = chunk_x >> 5;
         let region_z: i32 = chunk_z >> 5;
 
-        let region_mutex = self.get_or_create_region(region_x, region_z);
-        let mut region = region_mutex.lock().unwrap();
-        let chunk: &mut ChunkToModify = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let region = self.get_or_create_region(region_x, region_z);
+        let chunk_mutex = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let mut chunk = chunk_mutex.lock().unwrap();
 
         chunk.set_block_with_properties(
             (x & 15).try_into().unwrap(),
@@ -455,9 +466,9 @@ impl<'a> WorldEditor<'a> {
         block_entities.insert("y".to_string(), Value::Int(absolute_y));
         block_entities.insert("z".to_string(), Value::Int(z));
 
-        let region_mutex = self.world.get_or_create_region(region_x, region_z);
-        let mut region = region_mutex.lock().unwrap();
-        let chunk: &mut ChunkToModify = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let region = self.world.get_or_create_region(region_x, region_z);
+        let chunk_mutex = region.get_or_create_chunk(chunk_x & 31, chunk_z & 31);
+        let mut chunk = chunk_mutex.lock().unwrap();
 
         if let Some(chunk_data) = chunk.other.get_mut("block_entities") {
             if let Value::List(entities) = chunk_data {
@@ -469,7 +480,7 @@ impl<'a> WorldEditor<'a> {
                 Value::List(vec![Value::Compound(block_entities)]),
             );
         }
-        drop(region);
+        drop(chunk);
 
         self.set_block(SIGN, x, y, z, None, None);
     }
@@ -797,17 +808,20 @@ impl<'a> WorldEditor<'a> {
             .for_each(|entry| {
                 let region_x = entry.key().0;
                 let region_z = entry.key().1;
-                let region_mutex = entry.value();
-                let region_to_modify = region_mutex.lock().unwrap();
+                let region = entry.value();
 
-                let mut region = self.create_region(region_x, region_z);
+                let mut region_file = self.create_region(region_x, region_z);
                 let mut ser_buffer = Vec::with_capacity(8192);
 
-                for (&(chunk_x, chunk_z), chunk_to_modify) in &region_to_modify.chunks {
+                for entry in region.chunks.iter() {
+                    let (chunk_x, chunk_z) = entry.key();
+                    let chunk_mutex = entry.value();
+                    let chunk_to_modify = chunk_mutex.lock().unwrap();
+
                     if !chunk_to_modify.sections.is_empty() || !chunk_to_modify.other.is_empty() {
                         // Read existing chunk data if it exists
-                        let existing_data = region
-                            .read_chunk(chunk_x as usize, chunk_z as usize)
+                        let existing_data = region_file
+                            .read_chunk(*chunk_x as usize, *chunk_z as usize)
                             .unwrap()
                             .unwrap_or_default();
 
@@ -878,15 +892,15 @@ impl<'a> WorldEditor<'a> {
                         }
 
                         // Update chunk coordinates and flags
-                        chunk.x_pos = chunk_x + (region_x * 32);
-                        chunk.z_pos = chunk_z + (region_z * 32);
+                        chunk.x_pos = *chunk_x + (region_x * 32);
+                        chunk.z_pos = *chunk_z + (region_z * 32);
 
                         // Create Level wrapper and save
                         let level_data = create_level_wrapper(&chunk);
                         ser_buffer.clear();
                         fastnbt::to_writer(&mut ser_buffer, &level_data).unwrap();
-                        region
-                            .write_chunk(chunk_x as usize, chunk_z as usize, &ser_buffer)
+                        region_file
+                            .write_chunk(*chunk_x as usize, *chunk_z as usize, &ser_buffer)
                             .unwrap();
                     }
                 }
@@ -898,13 +912,12 @@ impl<'a> WorldEditor<'a> {
                         let abs_chunk_z = chunk_z + (region_z * 32);
 
                         // Check if chunk exists in our modifications
-                        let chunk_exists =
-                            region_to_modify.chunks.contains_key(&(chunk_x, chunk_z));
+                        let chunk_exists = region.chunks.contains_key(&(chunk_x, chunk_z));
 
                         // If chunk doesn't exist, create it with base layer
                         if !chunk_exists {
                             let (ser_buffer, _) = Self::create_base_chunk(abs_chunk_x, abs_chunk_z);
-                            region
+                            region_file
                                 .write_chunk(chunk_x as usize, chunk_z as usize, &ser_buffer)
                                 .unwrap();
                         }
