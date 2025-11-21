@@ -199,7 +199,7 @@ fn generate_highways_internal(
                     block_range = 2;
                 }
                 "path" => {
-                    block_type = DIRT_PATH;
+                    block_type = highway_surface(element, &DIRT_PATH);
                     block_range = 1;
                 }
                 "motorway" | "primary" | "trunk" => {
@@ -669,7 +669,7 @@ pub fn highway_surface(element: &ProcessedElement, default_surface: &Block) -> B
             "asphalt" => BLACK_CONCRETE,
             "gravel" | "fine_gravel" => GRAVEL,
             "grass" => GRASS_BLOCK,
-            "dirt" | "ground" | "earth" => COARSE_DIRT,
+            "dirt" | "ground" | "earth" => DIRT_PATH,
             "sand" => SAND,
             "concrete" => LIGHT_GRAY_CONCRETE,
             _ => *default_surface, // Default to provided default for unknown surfaces
