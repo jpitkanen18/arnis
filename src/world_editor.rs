@@ -57,23 +57,35 @@ struct PaletteItem {
 }
 
 struct SectionToModify {
-    blocks: [Block; 4096],
-    // Store properties for blocks that have them, indexed by the same index as blocks array
+    // Palette-based storage: 2 bytes per block instead of 8 bytes
+    block_indices: Box<[u16; 4096]>,     // Indices into palette
+    palette: Vec<Block>,                 // Unique blocks only
+    palette_map: FnvHashMap<Block, u16>, // Fast reverse lookup
     properties: FnvHashMap<usize, Value>,
 }
 
 impl SectionToModify {
     fn get_block(&self, x: u8, y: u8, z: u8) -> Option<Block> {
-        let b = self.blocks[Self::index(x, y, z)];
+        let idx = Self::index(x, y, z);
+        let palette_idx = self.block_indices[idx] as usize;
+
+        let b = *self.palette.get(palette_idx)?;
         if b == AIR {
             return None;
         }
-
         Some(b)
     }
 
     fn set_block(&mut self, x: u8, y: u8, z: u8, block: Block) {
-        self.blocks[Self::index(x, y, z)] = block;
+        let idx = Self::index(x, y, z);
+
+        let palette_idx = *self.palette_map.entry(block).or_insert_with(|| {
+            let new_idx = self.palette.len() as u16;
+            self.palette.push(block);
+            new_idx
+        });
+
+        self.block_indices[idx] = palette_idx;
     }
 
     fn set_block_with_properties(
@@ -84,13 +96,19 @@ impl SectionToModify {
         block_with_props: BlockWithProperties,
     ) {
         let index = Self::index(x, y, z);
-        self.blocks[index] = block_with_props.block;
+        let block = block_with_props.block;
 
-        // Store properties if they exist
+        let palette_idx = *self.palette_map.entry(block).or_insert_with(|| {
+            let new_idx = self.palette.len() as u16;
+            self.palette.push(block);
+            new_idx
+        });
+
+        self.block_indices[index] = palette_idx;
+
         if let Some(props) = block_with_props.properties {
             self.properties.insert(index, props);
         } else {
-            // Remove any existing properties for this position
             self.properties.remove(&index);
         }
     }
@@ -104,11 +122,15 @@ impl SectionToModify {
         let mut unique_blocks: Vec<(Block, Option<Value>)> = Vec::new();
         let mut palette_lookup: FnvHashMap<(Block, Option<String>), usize> = FnvHashMap::default();
 
-        // Build unique block combinations and lookup table
-        for (i, &block) in self.blocks.iter().enumerate() {
+        // Build unique block combinations from palette-based storage
+        for (i, &palette_idx) in self.block_indices.iter().enumerate() {
+            let block = self
+                .palette
+                .get(palette_idx as usize)
+                .copied()
+                .unwrap_or(AIR);
             let properties = self.properties.get(&i).cloned();
 
-            // Create a key for the lookup (block + properties hash)
             let props_key = properties.as_ref().map(|p| format!("{p:?}"));
             let lookup_key = (block, props_key);
 
@@ -119,7 +141,7 @@ impl SectionToModify {
             }
         }
 
-        let mut bits_per_block = 4; // minimum allowed
+        let mut bits_per_block = 4;
         while (1 << bits_per_block) < unique_blocks.len() {
             bits_per_block += 1;
         }
@@ -128,7 +150,12 @@ impl SectionToModify {
         let mut cur = 0;
         let mut cur_idx = 0;
 
-        for (i, &block) in self.blocks.iter().enumerate() {
+        for (i, &palette_idx) in self.block_indices.iter().enumerate() {
+            let block = self
+                .palette
+                .get(palette_idx as usize)
+                .copied()
+                .unwrap_or(AIR);
             let properties = self.properties.get(&i).cloned();
             let props_key = properties.as_ref().map(|p| format!("{p:?}"));
             let lookup_key = (block, props_key);
@@ -170,8 +197,13 @@ impl SectionToModify {
 
 impl Default for SectionToModify {
     fn default() -> Self {
+        let mut palette_map = FnvHashMap::default();
+        palette_map.insert(AIR, 0);
+
         Self {
-            blocks: [AIR; 4096],
+            block_indices: Box::new([0; 4096]),
+            palette: vec![AIR],
+            palette_map,
             properties: FnvHashMap::default(),
         }
     }
