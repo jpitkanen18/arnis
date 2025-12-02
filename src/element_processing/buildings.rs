@@ -339,13 +339,8 @@ pub fn generate_buildings(
         .and_then(|value| parse_level_to_i32(value))
         .unwrap_or(1);
 
-    let treat_as_open_shelter = element
-        .tags
-        .get("amenity")
-        .is_some_and(|amenity| amenity == "shelter")
-        || (building_type == "roof" && declared_levels_for_roof <= 1);
-
-    if treat_as_open_shelter {
+    // Handle amenity=shelter
+    if element.tags.get("amenity").is_some_and(|amenity| amenity == "shelter") {
         let roof_block: Block = STONE_BRICK_SLAB;
 
         // Use cached floor area instead of recalculating
@@ -371,6 +366,44 @@ pub fn generate_buildings(
             for (x, z) in roof_area.iter() {
                 editor.set_block(roof_block, *x, 5, *z, None, None);
             }
+        }
+
+        return;
+    }
+
+    // Handle building=roof with 1 or undefined levels
+    if building_type == "roof" && declared_levels_for_roof <= 1 {
+        let roof_height: i32 = 5;
+
+        // Use cached floor area
+        let roof_area: &Vec<(i32, i32)> = &cached_floor_area;
+
+        // Iterate through the nodes to create the roof edges using Bresenham's line algorithm
+        let mut previous_node: Option<(i32, i32)> = None;
+        for node in &element.nodes {
+            let x: i32 = node.x;
+            let z: i32 = node.z;
+
+            if let Some(prev) = previous_node {
+                let bresenham_points: Vec<(i32, i32, i32)> =
+                    bresenham_line(prev.0, roof_height, prev.1, x, roof_height, z);
+                for (bx, _, bz) in bresenham_points {
+                    editor.set_block(STONE_BRICK_SLAB, bx, roof_height, bz, None, None);
+                    // Set roof block at edge
+                }
+            }
+
+            for y in 1..=(roof_height - 1) {
+                editor.set_block(COBBLESTONE_WALL, x, y, z, None, None);
+            }
+
+            previous_node = Some((x, z));
+        }
+
+        // Fill the interior of the roof with STONE_BRICK_SLAB
+        for (x, z) in roof_area.iter() {
+            editor.set_block(STONE_BRICK_SLAB, *x, roof_height, *z, None, None);
+            // Set roof block
         }
 
         return;
